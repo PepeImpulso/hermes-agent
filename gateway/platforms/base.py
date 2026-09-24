@@ -3964,6 +3964,16 @@ class BasePlatformAdapter(ABC):
             event, session_key, text_content, metadata,
             reply_to=_reply_anchor_for_event(event), is_ephemeral_response=is_ephemeral_response)
         record_delivery(result)
+        if getattr(event, "_native_telegram_text_only", False):
+            try:
+                from gateway.native_telegram_receipts import capture_native_text_ack
+                await asyncio.to_thread(
+                    capture_native_text_ack,
+                    config=_config_section("gateway").get("native_telegram_receipts"),
+                    event=event, session_key=session_key, result=result, adapter=delivery_adapter,
+                )
+            except Exception:
+                logger.warning("native Telegram receipt capture failed", exc_info=True)
         if ephemeral_ttl and ephemeral_ttl > 0 and result.success and result.message_id:
             delivery_adapter._schedule_ephemeral_delete(event.source.chat_id, result.message_id, ephemeral_ttl)
 
@@ -4152,9 +4162,17 @@ class BasePlatformAdapter(ABC):
                     with contextlib.suppress(OSError):
                         os.remove(_tts_requested_path)
                 if text_content and not _tts_caption_delivered:
-                    await self._send_final_text(
-                        event, session_key, text_content, _final_thread_metadata,
-                        is_ephemeral_response, _ephemeral_ttl, _record_delivery)
+                    event._native_telegram_text_only = bool(
+                        getattr(getattr(event.source, "platform", None), "value", None) == "telegram"
+                        and not is_ephemeral_response and not _tts_paths and not extracted.images
+                        and not extracted.local_files and not extracted.media_files
+                        and not getattr(event, "_native_telegram_other_delivery", False))
+                    try:
+                        await self._send_final_text(
+                            event, session_key, text_content, _final_thread_metadata,
+                            is_ephemeral_response, _ephemeral_ttl, _record_delivery)
+                    finally:
+                        event._native_telegram_text_only = False
                 await self._deliver_attachments(
                     event, extracted, _final_thread_metadata,
                     anything_sent=delivery_attempted or _tts_caption_delivered,
