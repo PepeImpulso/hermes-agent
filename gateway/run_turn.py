@@ -1776,6 +1776,7 @@ class GatewayTurnMixin:
         if not _streaming_tts_done and self._should_send_voice_reply(
             event, response, agent_messages, already_sent=bool(agent_result.get("already_sent")),
         ):
+            event._native_telegram_other_delivery = True
             await self._send_voice_reply(event, response)
 
         # Streamed responses still need MEDIA: files delivered (chunks carry the tags verbatim). Never
@@ -2069,6 +2070,14 @@ class GatewayTurnMixin:
                 hidden_reasoning_incomplete=hidden_reasoning_incomplete,
                 is_context_overflow_failure=is_context_overflow_failure,
             )
+            # A later provider ACK may attest this native turn only after the
+            # agent finished and its transcript was persisted. Streaming,
+            # queued follow-ups and non-text delivery have separate contracts.
+            if (source.platform == Platform.TELEGRAM and agent_result.get("completed") is True
+                    and not agent_result.get("failed") and not agent_failed_early
+                    and not hidden_reasoning_incomplete and not agent_result.get("already_sent")
+                    and response and not getattr(event, "internal", False)):
+                event._native_telegram_completed_turn = (session_key, _run_start_session_id)
             return await self._hmwa_deliver_turn_response(
                 event, source, session_entry, session_key, run_generation,
                 agent_result, agent_messages, response, _footer_line, _intentional_silence,
